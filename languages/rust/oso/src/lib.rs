@@ -83,7 +83,7 @@ mod query;
 
 pub use crate::oso::{Action, Oso};
 pub use errors::{OsoError, Result};
-pub use host::{Class, ClassBuilder, FromPolar, FromPolarList, PolarValue, ToPolar, ToPolarList};
+pub use host::{Class, ClassBuilder, ExtClassBuilder, FromPolar, FromPolarList, PolarValue, ToPolar, ToPolarList, Instance};
 pub use query::{Query, ResultSet};
 
 use polar_core::polar::Polar;

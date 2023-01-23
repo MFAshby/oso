@@ -16,7 +16,7 @@ use super::to_polar::ToPolarResult;
 use super::Host;
 use super::PolarValue;
 
-type Attributes = HashMap<&'static str, AttributeGetter>;
+type Attributes = HashMap<String, AttributeGetter>;
 type RegisterHooks = Vec<RegisterHook>;
 type ClassMethods = HashMap<&'static str, ClassMethod>;
 type InstanceMethods = HashMap<&'static str, InstanceMethod>;
@@ -24,6 +24,13 @@ type InstanceMethods = HashMap<&'static str, InstanceMethod>;
 type EqualityMethod = Arc<dyn Fn(&Host, &Instance, &Instance) -> crate::Result<bool> + Send + Sync>;
 type IteratorMethod =
     Arc<dyn Fn(&Host, &Instance) -> crate::Result<crate::host::PolarIterator> + Send + Sync>;
+
+/// Accept type IDs from external systems.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
+pub enum TypId {
+    Rust(TypeId),
+    External(u64),
+}
 
 fn equality_not_supported() -> EqualityMethod {
     let eq = move |host: &Host, lhs: &Instance, _: &Instance| -> crate::Result<bool> {
@@ -51,7 +58,7 @@ fn iterator_not_supported() -> IteratorMethod {
 pub struct Class {
     /// The class name. Defaults to the `std::any::type_name`
     pub name: String,
-    pub type_id: TypeId,
+    pub type_id: TypId,
     /// A wrapped method that constructs an instance of `T` from `PolarValue`s
     constructor: Option<Constructor>,
     /// Methods that return simple attribute lookups on an instance of `T`
@@ -103,7 +110,7 @@ impl Class {
 
     fn get_method(&self, name: &str) -> Option<InstanceMethod> {
         tracing::trace!({class=%self.name, name}, "get_method");
-        if self.type_id == TypeId::of::<Class>() {
+        if self.type_id == TypId::Rust(TypeId::of::<Class>()) {
             // all methods on `Class` redirect by looking up the class method
             Some(InstanceMethod::from_class_method(name.to_string()))
         } else {
@@ -146,7 +153,7 @@ where
                 class_methods: ClassMethods::new(),
                 equality_check: equality_not_supported(),
                 into_iter: iterator_not_supported(),
-                type_id: TypeId::of::<T>(),
+                type_id: TypId::Rust(TypeId::of::<T>()),
                 register_hooks: RegisterHooks::new(),
             },
             ty: std::marker::PhantomData,
@@ -240,13 +247,13 @@ where
 
     /// Add an attribute getter for statements like `foo.bar`
     /// `class.add_attribute_getter("bar", |instance| instance.bar)
-    pub fn add_attribute_getter<F, R>(mut self, name: &'static str, f: F) -> Self
+    pub fn add_attribute_getter<F, R>(mut self, name: &str, f: F) -> Self
     where
         F: Fn(&T) -> R + Send + Sync + 'static,
         R: crate::ToPolar,
         T: 'static,
     {
-        self.class.attributes.insert(name, AttributeGetter::new(f));
+        self.class.attributes.insert(name.to_string(), AttributeGetter::new(f));
         self
     }
 
@@ -319,6 +326,51 @@ where
     }
 }
 
+/////////////////////////// External types (i.e. not Rust types) ////////////////////////////////
+
+#[derive(Clone)]
+pub struct ExtClassBuilder {
+    class: Class
+}
+
+impl ExtClassBuilder
+{
+    /// Create a new class builder.
+    pub fn new(ext_type_id: u64, name: String) -> Self {
+        Self {
+            class: Class {
+                name: name,
+                constructor: None,
+                attributes: HashMap::new(),
+                instance_methods: InstanceMethods::new(),
+                class_methods: ClassMethods::new(),
+                equality_check: equality_not_supported(),
+                into_iter: iterator_not_supported(),
+                type_id: TypId::External(ext_type_id),
+                register_hooks: RegisterHooks::new(),
+            },
+        }
+    }
+
+    /// Add an attribute getter for statements like `foo.bar`
+    /// `class.add_attribute_getter("bar", |instance| instance.bar)
+    pub fn add_attribute_getter<T: 'static, F, R>(mut self, name: &str, f: F) -> Self
+    where
+        F: Fn(&T) -> R + Send + Sync + 'static,
+        R: crate::ToPolar,
+    {
+        self.class.attributes.insert(name.to_string(), AttributeGetter::new(f));
+        self
+    }
+
+    /// Finish building a build the class
+    pub fn build(self) -> Class {
+        self.class
+    }
+}
+
+/////////////////////////// END HACKERY //////////////////////////////////
+
 /// Container for an instance of a `Class`
 ///
 /// Not guaranteed to be an instance of a registered class,
@@ -331,6 +383,9 @@ where
 #[derive(Clone)]
 pub struct Instance {
     inner: Arc<dyn std::any::Any + Send + Sync>,
+
+    // No longer derivable from inner!
+    type_id: TypId,
 
     /// The type name of the Instance, to be used for debugging purposes only.
     /// To get the registered name, use `Instance::name`.
@@ -348,7 +403,16 @@ impl Instance {
     pub fn new<T: Send + Sync + 'static>(instance: T) -> Self {
         Self {
             inner: Arc::new(instance),
+            type_id: TypId::Rust(std::any::TypeId::of::<T>()),
             debug_type_name: std::any::type_name::<T>(),
+        }
+    }
+
+    pub fn new_ext<T: Send + Sync + 'static>(instance: T, ext_type_id: u64, debug_type_name: &'static str) -> Self {
+        Self {
+            inner: Arc::new(instance),
+            type_id: TypId::External(ext_type_id),
+            debug_type_name: debug_type_name,
         }
     }
 
@@ -357,13 +421,13 @@ impl Instance {
         self.type_id() == class.type_id
     }
 
-    pub fn type_id(&self) -> std::any::TypeId {
-        self.inner.as_ref().type_id()
+    pub fn type_id(&self) -> TypId {
+        self.type_id
     }
 
     /// Looks up the `Class` for this instance on the provided `host`
     pub fn class<'a>(&self, host: &'a Host) -> crate::Result<&'a Class> {
-        host.get_class_by_type_id(self.inner.as_ref().type_id())
+        host.get_class_by_type_id(self.type_id())
             .map_err(|_| OsoError::MissingClassError {
                 name: self.debug_type_name.to_string(),
             })
@@ -446,7 +510,7 @@ impl Instance {
 
         let expected_name = host
             .and_then(|h| {
-                h.get_class_by_type_id(std::any::TypeId::of::<T>())
+                h.get_class_by_type_id(TypId::Rust(std::any::TypeId::of::<T>()))
                     .map(|class| class.name.clone())
                     .ok()
             })

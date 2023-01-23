@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet, LinkedL
 
 use super::DEFAULT_CLASSES;
 use crate::PolarValue;
+use crate::host::TypId;
 
 /// Convert Rust types to Polar types.
 ///
@@ -37,17 +38,19 @@ pub trait ToPolar {
 
 impl<C: crate::PolarClass + Send + Sync> ToPolar for C {
     fn to_polar(self) -> PolarValue {
+
+        let tid = TypId::Rust(std::any::TypeId::of::<C>());
         let registered = DEFAULT_CLASSES
             .read()
             .unwrap()
-            .get(&std::any::TypeId::of::<C>())
+            .get(&tid)
             .is_some();
 
         if !registered {
             DEFAULT_CLASSES
                 .write()
                 .unwrap()
-                .entry(std::any::TypeId::of::<C>())
+                .entry(tid)
                 .or_insert_with(C::get_polar_class);
         }
 

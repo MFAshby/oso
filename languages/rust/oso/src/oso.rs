@@ -202,6 +202,10 @@ impl Oso {
         self.load_sources(vec![Source::new(src)])
     }
 
+    pub fn load_strs(&mut self, srcs: Vec<&str>) -> crate::Result<()> {
+        self.load_sources(srcs.into_iter().map(|x| {Source::new(x)}).collect())
+    }
+
     /// Query the knowledge base. This can be an allow query or any other polar expression.
     /// # Examples
     /// ```ignore

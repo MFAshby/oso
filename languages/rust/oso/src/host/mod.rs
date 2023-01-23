@@ -11,7 +11,7 @@ mod method;
 mod to_polar;
 mod value;
 
-pub use class::{Class, ClassBuilder, Instance};
+pub use class::{Class, ClassBuilder, ExtClassBuilder, Instance, TypId};
 pub use from_polar::{FromPolar, FromPolarList};
 use polar_core::terms::{Operator, Symbol};
 pub use to_polar::{PolarIterator, ToPolar, ToPolarList};
@@ -21,7 +21,7 @@ lazy_static::lazy_static! {
     /// Map of classes that have been globally registered
     ///
     /// These will be used as a fallback, and cached on the host when an unknown instance is seen
-    static ref DEFAULT_CLASSES: Arc<RwLock<HashMap<std::any::TypeId, super::Class>>> = Default::default();
+    static ref DEFAULT_CLASSES: Arc<RwLock<HashMap<TypId, super::Class>>> = Default::default();
 }
 
 impl crate::PolarClass for Class {}
@@ -45,7 +45,7 @@ pub struct Host {
     /// Map from type IDs, to class names
     /// This helps us go from a generic type `T` to the
     /// class name it is registered as
-    class_names: HashMap<std::any::TypeId, String>,
+    class_names: HashMap<TypId, String>,
 
     pub accept_expression: bool,
 }
@@ -74,7 +74,7 @@ impl Host {
             })
     }
 
-    pub fn get_class_by_type_id(&self, id: std::any::TypeId) -> crate::Result<&Class> {
+    pub fn get_class_by_type_id(&self, id: TypId) -> crate::Result<&Class> {
         self.class_names
             .get(&id)
             .ok_or_else(|| OsoError::MissingClassError {
